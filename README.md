@@ -18,10 +18,11 @@ large button to start or stop every ride-safety system.
 | A possible accident opens a 20-second cancellation window before SOS. | Guardians can check whether the rider is riding, safe, or offline. |
 | The app checks helmets, finds hospitals, calculates routes, and scores rides. | The Family view shows safety score, speed, last update, location, and alerts. |
 
-> **About these images:** These are real Flutter frames rendered from the
-> implemented widgets at a 430 × 932 phone size. Names, locations, and ride
-> numbers shown in the images are representative presentation data—not real
-> customer records.
+> **About these images:** The application screens below were captured from the
+> working Android app running on a physical Vivo V2031 phone. The emergency
+> countdown image is a safe presentation preview so no real SOS is dispatched.
+> Live tracking is shown paused to avoid publishing the phone's precise GPS
+> coordinates in this public repository.
 
 ## Product walkthrough
 
@@ -66,7 +67,7 @@ zoom, or tap the GPS control to resume automatic rider following. The green
 line records the path travelled and red markers identify nearby hospitals.
 
 <p align="center">
-  <img src="docs/images/02-live-tracking.png" width="310" alt="Live tracking and nearby hospital route screen">
+  <img src="docs/images/02-live-tracking.png" width="310" alt="Interactive live tracking map on a physical Android phone">
 </p>
 
 Amazon Location Service performs the real nearby-place search and scooter-route

@@ -23,6 +23,12 @@ class AuthService {
 
   Future<String?> currentUsername() async {
     if (!await isSignedIn()) return null;
+    final attributes = await Amplify.Auth.fetchUserAttributes();
+    for (final attribute in attributes) {
+      if (attribute.userAttributeKey == AuthUserAttributeKey.email) {
+        return attribute.value;
+      }
+    }
     return (await Amplify.Auth.getCurrentUser()).username;
   }
 
