@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart' show LatLng;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../controllers/ride_controller.dart';
@@ -11,11 +13,13 @@ class AppShell extends StatefulWidget {
     required this.controller,
     this.username,
     this.onSignOut,
+    this.mapTilesEnabled = true,
   });
 
   final RideController controller;
   final String? username;
   final Future<void> Function()? onSignOut;
+  final bool mapTilesEnabled;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -40,7 +44,10 @@ class _AppShellState extends State<AppShell> {
                     controller: controller,
                     username: widget.username,
                   ),
-                  _LiveScreen(controller: controller),
+                  _LiveScreen(
+                    controller: controller,
+                    mapTilesEnabled: widget.mapTilesEnabled,
+                  ),
                   _SafetyScreen(controller: controller),
                   _HistoryScreen(controller: controller),
                   _FamilyScreen(
@@ -381,12 +388,77 @@ class _RideHero extends StatelessWidget {
   }
 }
 
-class _LiveScreen extends StatelessWidget {
-  const _LiveScreen({required this.controller});
+class _LiveScreen extends StatefulWidget {
+  const _LiveScreen({required this.controller, required this.mapTilesEnabled});
+
   final RideController controller;
+  final bool mapTilesEnabled;
+
+  @override
+  State<_LiveScreen> createState() => _LiveScreenState();
+}
+
+class _LiveScreenState extends State<_LiveScreen> {
+  static const _fallbackCenter = LatLng(19.0760, 72.8777);
+  final MapController _mapController = MapController();
+  LatLng? _lastFollowedPosition;
+  bool _mapReady = false;
+  bool _followRider = true;
+
+  RideController get controller => widget.controller;
+
+  LatLng? get _riderPosition {
+    final position = controller.currentPosition;
+    if (position == null) return null;
+    return LatLng(position.latitude, position.longitude);
+  }
+
+  void _centerOnRider() {
+    final rider = _riderPosition;
+    if (!_mapReady || rider == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Start a ride to acquire your GPS position.'),
+        ),
+      );
+      return;
+    }
+    setState(() => _followRider = true);
+    _mapController.move(rider, 16);
+  }
+
+  void _zoomBy(double amount) {
+    if (!_mapReady) return;
+    final camera = _mapController.camera;
+    _mapController.move(
+      camera.center,
+      (camera.zoom + amount).clamp(3, 19).toDouble(),
+    );
+  }
+
+  void _followLatestPosition() {
+    final rider = _riderPosition;
+    if (!widget.mapTilesEnabled ||
+        !_mapReady ||
+        !_followRider ||
+        rider == null ||
+        rider == _lastFollowedPosition) {
+      return;
+    }
+    _lastFollowedPosition = rider;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_mapReady || !_followRider) return;
+      final zoom = _mapController.camera.zoom < 16
+          ? 16.0
+          : _mapController.camera.zoom;
+      _mapController.move(rider, zoom);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    _followLatestPosition();
+    final rider = _riderPosition;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
@@ -404,13 +476,135 @@ class _LiveScreen extends StatelessWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    CustomPaint(painter: _MapPainter()),
+                    if (widget.mapTilesEnabled)
+                      FlutterMap(
+                        mapController: _mapController,
+                        options: MapOptions(
+                          initialCenter: rider ?? _fallbackCenter,
+                          initialZoom: rider == null ? 11 : 16,
+                          minZoom: 3,
+                          maxZoom: 19,
+                          keepAlive: true,
+                          onMapReady: () {
+                            _mapReady = true;
+                            if (rider != null) {
+                              _lastFollowedPosition = rider;
+                              _mapController.move(rider, 16);
+                            }
+                          },
+                          onPositionChanged: (_, hasGesture) {
+                            if (hasGesture && _followRider && mounted) {
+                              setState(() => _followRider = false);
+                            }
+                          },
+                        ),
+                        children: [
+                          TileLayer(
+                            urlTemplate:
+                                'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                            userAgentPackageName: 'com.example.bike_safety_ai',
+                            maxZoom: 19,
+                          ),
+                          if (controller.route.length > 1)
+                            PolylineLayer(
+                              polylines: [
+                                Polyline(
+                                  points: controller.route
+                                      .map(
+                                        (point) => LatLng(
+                                          point.latitude,
+                                          point.longitude,
+                                        ),
+                                      )
+                                      .toList(),
+                                  strokeWidth: 6,
+                                  color: AppColors.primary,
+                                  borderStrokeWidth: 2,
+                                  borderColor: Colors.white,
+                                ),
+                              ],
+                            ),
+                          MarkerLayer(
+                            markers: [
+                              if (rider != null)
+                                Marker(
+                                  point: rider,
+                                  width: 52,
+                                  height: 52,
+                                  child: const _RiderMapMarker(),
+                                ),
+                              ...controller.nearbyHospitals.map(
+                                (place) => Marker(
+                                  point: LatLng(
+                                    place.latitude,
+                                    place.longitude,
+                                  ),
+                                  width: 44,
+                                  height: 44,
+                                  child: Tooltip(
+                                    message: place.name,
+                                    child: GestureDetector(
+                                      onTap: () =>
+                                          controller.routeToHospital(place),
+                                      child: const _HospitalMapMarker(),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          RichAttributionWidget(
+                            attributions: [
+                              TextSourceAttribution(
+                                'OpenStreetMap contributors',
+                                onTap: () => launchUrl(
+                                  Uri.parse(
+                                    'https://www.openstreetmap.org/copyright',
+                                  ),
+                                  mode: LaunchMode.externalApplication,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      )
+                    else
+                      CustomPaint(painter: _MapPainter()),
                     Positioned(
                       top: 16,
                       left: 16,
                       right: 16,
                       child: _MapStatus(controller: controller),
                     ),
+                    if (widget.mapTilesEnabled)
+                      Positioned(
+                        top: 94,
+                        right: 14,
+                        child: Column(
+                          children: [
+                            _MapControlButton(
+                              tooltip: 'Follow my location',
+                              icon: _followRider
+                                  ? Icons.gps_fixed_rounded
+                                  : Icons.gps_not_fixed_rounded,
+                              active: _followRider,
+                              onPressed: _centerOnRider,
+                            ),
+                            const SizedBox(height: 8),
+                            _MapControlButton(
+                              tooltip: 'Zoom in',
+                              icon: Icons.add_rounded,
+                              onPressed: () => _zoomBy(1),
+                            ),
+                            const SizedBox(height: 8),
+                            _MapControlButton(
+                              tooltip: 'Zoom out',
+                              icon: Icons.remove_rounded,
+                              onPressed: () => _zoomBy(-1),
+                            ),
+                          ],
+                        ),
+                      ),
                     Positioned(
                       bottom: 16,
                       left: 16,
@@ -1630,6 +1824,69 @@ class _MapGlass extends StatelessWidget {
       ],
     ),
     child: child,
+  );
+}
+
+class _MapControlButton extends StatelessWidget {
+  const _MapControlButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+    this.active = false,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback onPressed;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: active ? AppColors.primary : Colors.white,
+    elevation: 5,
+    borderRadius: BorderRadius.circular(14),
+    child: IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon),
+      color: active ? Colors.white : AppColors.ink,
+    ),
+  );
+}
+
+class _RiderMapMarker extends StatelessWidget {
+  const _RiderMapMarker();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    decoration: BoxDecoration(
+      color: AppColors.primary,
+      shape: BoxShape.circle,
+      border: Border.all(color: Colors.white, width: 4),
+      boxShadow: const [
+        BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 3)),
+      ],
+    ),
+    child: const Icon(Icons.two_wheeler_rounded, color: Colors.white, size: 25),
+  );
+}
+
+class _HospitalMapMarker extends StatelessWidget {
+  const _HospitalMapMarker();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    decoration: BoxDecoration(
+      color: AppColors.danger,
+      shape: BoxShape.circle,
+      border: Border.all(color: Colors.white, width: 3),
+      boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8)],
+    ),
+    child: const Icon(
+      Icons.local_hospital_rounded,
+      color: Colors.white,
+      size: 21,
+    ),
   );
 }
 

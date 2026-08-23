@@ -70,6 +70,17 @@ class RideMonitor {
       locationSettings: settings,
     ).listen(onPosition);
 
+    // Seed the UI immediately instead of waiting for the stream's distance
+    // filter to emit after the rider starts moving.
+    try {
+      final initialPosition = await Geolocator.getCurrentPosition(
+        locationSettings: settings,
+      ).timeout(const Duration(seconds: 12));
+      onPosition(initialPosition);
+    } on TimeoutException {
+      // The position stream remains active and will update when GPS locks.
+    }
+
     _gyroscopeSubscription =
         gyroscopeEventStream(
           samplingPeriod: SensorInterval.gameInterval,

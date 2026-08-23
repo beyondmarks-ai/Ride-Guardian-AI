@@ -12,9 +12,14 @@ void main() {
 }
 
 class RideGuardianApp extends StatefulWidget {
-  const RideGuardianApp({super.key, this.authenticationEnabled = true});
+  const RideGuardianApp({
+    super.key,
+    this.authenticationEnabled = true,
+    this.mapTilesEnabled = true,
+  });
 
   final bool authenticationEnabled;
+  final bool mapTilesEnabled;
 
   @override
   State<RideGuardianApp> createState() => _RideGuardianAppState();
@@ -76,6 +81,7 @@ class _RideGuardianAppState extends State<RideGuardianApp> {
                 return AppShell(
                   controller: controller,
                   username: authController.username,
+                  mapTilesEnabled: widget.mapTilesEnabled,
                   onSignOut: () async {
                     await controller.stopRide();
                     await authController.signOut();
@@ -83,7 +89,10 @@ class _RideGuardianAppState extends State<RideGuardianApp> {
                 );
               },
             )
-          : AppShell(controller: controller),
+          : AppShell(
+              controller: controller,
+              mapTilesEnabled: widget.mapTilesEnabled,
+            ),
     );
   }
 }

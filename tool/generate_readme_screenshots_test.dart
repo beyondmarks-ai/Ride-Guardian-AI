@@ -39,6 +39,7 @@ void main() {
           child: AppShell(
             controller: controller,
             username: 'rakesh@example.com',
+            mapTilesEnabled: false,
           ),
         ),
       ),
@@ -63,6 +64,7 @@ void main() {
           child: AppShell(
             controller: emergencyController,
             username: 'rakesh@example.com',
+            mapTilesEnabled: false,
           ),
         ),
       ),

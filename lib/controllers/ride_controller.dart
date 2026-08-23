@@ -122,7 +122,6 @@ class RideController extends ChangeNotifier {
     notifyListeners();
     try {
       currentPosition = null;
-      await _monitor.start(onPosition: _onPosition, onMotion: _onMotion);
       route.clear();
       events.clear();
       startedAt = DateTime.now();
@@ -133,13 +132,18 @@ class RideController extends ChangeNotifier {
       safetyScore = 100;
       _previousSpeedMps = 0;
       isRiding = true;
+      await _monitor.start(onPosition: _onPosition, onMotion: _onMotion);
       _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         elapsed = DateTime.now().difference(startedAt!);
         notifyListeners();
       });
     } on StateError catch (error) {
+      isRiding = false;
+      await _monitor.stop();
       errorMessage = error.message;
     } catch (_) {
+      isRiding = false;
+      await _monitor.stop();
       errorMessage = 'Unable to start safety monitoring on this device.';
     } finally {
       isStarting = false;

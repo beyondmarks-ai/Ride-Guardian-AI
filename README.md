@@ -60,7 +60,10 @@ the rider safe, and saves the ride summary.
 
 The Live screen communicates the most important information without distracting
 the rider: tracking state, current speed, current GPS position, nearby
-hospitals, and a route estimate to the selected hospital.
+hospitals, and a route estimate to the selected hospital. The production screen
+uses an interactive OpenStreetMap map: drag or pinch to explore, use +/− to
+zoom, or tap the GPS control to resume automatic rider following. The green
+line records the path travelled and red markers identify nearby hospitals.
 
 <p align="center">
   <img src="docs/images/02-live-tracking.png" width="310" alt="Live tracking and nearby hospital route screen">
@@ -132,7 +135,7 @@ The Family view supports:
 | Account security | Email registration, verification, login, logout | AWS Cognito + Amplify |
 | Universal ride control | One persistent Start/End button | Flutter controller and Android foreground service |
 | Speed monitoring | Live and maximum speed in km/h | Android GPS through Geolocator |
-| Location tracking | Live coordinates and cloud heartbeats | GPS + API Gateway + Lambda + DynamoDB |
+| Location tracking | Interactive rider-following map, ride trail, coordinates, and cloud heartbeats | OpenStreetMap + Flutter Map + GPS + API Gateway + Lambda + DynamoDB |
 | Ride distance | Distance accumulated along GPS route points | On-device route calculation |
 | Rider behavior | Harsh acceleration, braking, and sharp-turn events | Accelerometer/gyroscope rules |
 | Accident assistance | Impact alert, 20-second cancellation, automatic SOS | Motion analysis + Lambda + SNS |

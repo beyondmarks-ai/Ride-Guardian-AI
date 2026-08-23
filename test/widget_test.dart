@@ -6,7 +6,10 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      const RideGuardianApp(authenticationEnabled: false),
+      const RideGuardianApp(
+        authenticationEnabled: false,
+        mapTilesEnabled: false,
+      ),
     );
     await tester.pump();
 
