@@ -24,6 +24,10 @@ class AuthController extends ChangeNotifier {
       username = await _service.currentUsername();
     } on AmplifyException catch (exception) {
       error = exception.message;
+    } catch (exception, stackTrace) {
+      _logUnexpected(exception, stackTrace);
+      error =
+          'Secure authentication could not start. Restart the app and try again.';
     } finally {
       initializing = false;
       notifyListeners();
@@ -83,11 +87,21 @@ class AuthController extends ChangeNotifier {
       await operation();
     } on AuthException catch (exception) {
       error = exception.message;
-    } catch (_) {
-      error = 'Something went wrong. Check your connection and try again.';
+    } catch (exception, stackTrace) {
+      _logUnexpected(exception, stackTrace);
+      error =
+          'Authentication is unavailable on this device. Restart the app and try again.';
     } finally {
       busy = false;
       notifyListeners();
     }
+  }
+
+  void _logUnexpected(Object exception, StackTrace stackTrace) {
+    debugPrint(
+      'Unexpected authentication error (${exception.runtimeType}): '
+      '$exception',
+    );
+    debugPrintStack(stackTrace: stackTrace);
   }
 }
