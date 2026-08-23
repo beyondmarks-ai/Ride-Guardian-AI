@@ -1,0 +1,150 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: RideGuardian AI serverless backend
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures: [arm64]
+    Timeout: 15
+    MemorySize: 256
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref RideGuardianTable
+        EMERGENCY_TOPIC_ARN: !Ref EmergencyTopic
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: rideguardian-users
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 10
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: rideguardian-flutter
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: v1
+      CorsConfiguration:
+        AllowOrigins: ['*']
+        AllowHeaders: [authorization, content-type]
+        AllowMethods: [GET, POST, OPTIONS]
+      Auth:
+        DefaultAuthorizer: CognitoJwt
+        Authorizers:
+          CognitoJwt:
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              audience: [!Ref UserPoolClient]
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+
+  RideGuardianTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      SSESpecification: {SSEEnabled: true}
+      TimeToLiveSpecification: {AttributeName: ttl, Enabled: true}
+      AttributeDefinitions:
+        - {AttributeName: pk, AttributeType: S}
+        - {AttributeName: sk, AttributeType: S}
+      KeySchema:
+        - {AttributeName: pk, KeyType: HASH}
+        - {AttributeName: sk, KeyType: RANGE}
+
+  EmergencyTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: rideguardian-emergency-alerts
+      KmsMasterKeyId: alias/aws/sns
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: app.handler
+      Policies:
+        - DynamoDBCrudPolicy: {TableName: !Ref RideGuardianTable}
+        - SNSPublishMessagePolicy: {TopicName: !GetAtt EmergencyTopic.TopicName}
+        - Statement:
+            - Effect: Allow
+              Action: rekognition:DetectProtectiveEquipment
+              Resource: '*'
+            - Effect: Allow
+              Action: [geo-places:SearchNearby, geo-routes:CalculateRoutes]
+              Resource: '*'
+      Events:
+        Health:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /health
+            Method: GET
+            Auth: {Authorizer: NONE}
+        Location:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: /location, Method: POST}
+        Rides:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: /rides, Method: POST}
+        RidesGet:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: /rides, Method: GET}
+        Emergency:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: /emergency, Method: POST}
+        Helmet:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: /helmet-check, Method: POST}
+        Hospitals:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: /nearby-hospitals, Method: GET}
+        Route:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: /route, Method: GET}
+        Guardians:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: /guardians, Method: GET}
+        GuardianInvite:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: /guardians/invite, Method: POST}
+        GuardianInvitations:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: /guardians/invitations, Method: GET}
+        GuardianAccept:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: /guardians/accept, Method: POST}
+        SharedRiders:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: /shared-riders, Method: GET}
+        RiderStatus:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: /rider-status, Method: GET}
+        Alerts:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: /alerts, Method: GET}
+
+Outputs:
+  ApiBaseUrl:
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/v1
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient

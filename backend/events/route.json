@@ -1,0 +1,14 @@
+{
+  "rawPath": "/v1/route",
+  "queryStringParameters": {
+    "originLat": "19.0760",
+    "originLng": "72.8777",
+    "destinationLat": "19.1136",
+    "destinationLng": "72.8697"
+  },
+  "requestContext": {
+    "stage": "v1",
+    "http": {"method": "GET"},
+    "authorizer": {"jwt": {"claims": {"sub": "integration-test"}}}
+  }
+}

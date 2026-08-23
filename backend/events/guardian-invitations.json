@@ -1,0 +1,8 @@
+{
+  "rawPath": "/v1/guardians/invitations",
+  "requestContext": {
+    "stage": "v1",
+    "http": {"method": "GET"},
+    "authorizer": {"jwt": {"claims": {"sub": "guardian-integration", "email": "guardian.integration@example.com"}}}
+  }
+}

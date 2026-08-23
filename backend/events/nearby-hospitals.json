@@ -1,0 +1,9 @@
+{
+  "rawPath": "/v1/nearby-hospitals",
+  "queryStringParameters": {"lat": "19.0760", "lng": "72.8777"},
+  "requestContext": {
+    "stage": "v1",
+    "http": {"method": "GET"},
+    "authorizer": {"jwt": {"claims": {"sub": "integration-test"}}}
+  }
+}

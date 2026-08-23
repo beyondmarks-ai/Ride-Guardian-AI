@@ -1,0 +1,9 @@
+{
+  "rawPath": "/v1/location",
+  "body": "{\"latitude\":19.076,\"longitude\":72.8777,\"speedKph\":35,\"safetyScore\":94,\"status\":\"RIDING\"}",
+  "requestContext": {
+    "stage": "v1",
+    "http": {"method": "POST"},
+    "authorizer": {"jwt": {"claims": {"sub": "rider-integration", "email": "rider.integration@example.com"}}}
+  }
+}

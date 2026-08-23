@@ -1,0 +1,9 @@
+{
+  "rawPath": "/v1/rider-status",
+  "queryStringParameters": {"riderId": "rider-integration"},
+  "requestContext": {
+    "stage": "v1",
+    "http": {"method": "GET"},
+    "authorizer": {"jwt": {"claims": {"sub": "guardian-integration", "email": "guardian.integration@example.com"}}}
+  }
+}
