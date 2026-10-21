@@ -370,3 +370,10 @@ tool/                Repeatable screenshot generator
 ---
 
 **RideGuardian AI — one tap for a safer ride and better-informed family.**
+
+<!-- beyond-marks-credit:start -->
+---
+### Built by Beyond Marks AI Academy
+
+Developed by **Rakesh Kumar** at [Beyond Marks AI Academy](https://beyondmarks.ai).
+<!-- beyond-marks-credit:end -->
