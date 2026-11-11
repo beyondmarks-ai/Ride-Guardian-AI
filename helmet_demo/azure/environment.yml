@@ -1,0 +1,6 @@
+$schema: https://azuremlschemas.azureedge.net/latest/environment.schema.json
+name: rideguardian-helmet-inference
+version: 2
+conda_file: conda.yml
+image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu22.04:latest
+description: CPU inference environment for the RideGuardian helmet detector.

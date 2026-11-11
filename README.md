@@ -4,7 +4,8 @@
 > danger, helps the rider find medical care, and keeps approved family members
 > informed.
 
-RideGuardian AI is a Flutter Android application with a serverless AWS backend.
+RideGuardian AI is a Flutter Android application with a hybrid Firebase,
+Google Maps Platform, and Microsoft Azure backend.
 The experience is intentionally simple: the rider signs in and presses one
 large button to start or stop every ride-safety system.
 
@@ -28,8 +29,10 @@ large button to start or stop every ride-safety system.
 
 ### 1. Secure access
 
-Every rider and guardian receives an individual account. AWS Cognito handles
-email verification, sign-in, secure sessions, and token refresh.
+Every rider and guardian receives an individual account. Firebase
+Authentication handles email verification, sign-in, secure sessions, and
+token refresh. Email/password and phone OTP are enabled; SMS is allowed for
+Indian (+91) numbers. Phone and email are separate accounts unless linked.
 
 <p align="center">
   <img src="docs/images/00-secure-sign-in.png" width="310" alt="RideGuardian secure sign-in screen">
@@ -62,7 +65,7 @@ the rider safe, and saves the ride summary.
 The Live screen communicates the most important information without distracting
 the rider: tracking state, current speed, current GPS position, nearby
 hospitals, and a route estimate to the selected hospital. The production screen
-uses an interactive OpenStreetMap map: drag or pinch to explore, use +/− to
+uses an interactive Google map: drag or pinch to explore, use +/− to
 zoom, or tap the GPS control to resume automatic rider following. The green
 line records the path travelled and red markers identify nearby hospitals.
 
@@ -70,8 +73,9 @@ line records the path travelled and red markers identify nearby hospitals.
   <img src="docs/images/02-live-tracking.png" width="310" alt="Interactive live tracking map on a physical Android phone">
 </p>
 
-Amazon Location Service performs the real nearby-place search and scooter-route
-calculation. The rider can hand the destination to Google Maps for navigation.
+Google Places API finds nearby hospitals and Google Routes API calculates the
+two-wheeler route. The rider can hand the destination to Google Maps for
+navigation.
 
 ### 4. Safety center
 
@@ -112,7 +116,8 @@ and safety score.
 ### 7. Family guardian circle
 
 The rider controls access. A family member cannot view ride data until the
-rider invites their exact account email and the family member accepts.
+rider invites their verified account email or international phone number and
+the family member accepts in Family.
 Permission is checked again by the backend whenever live rider status is
 requested.
 
@@ -133,20 +138,20 @@ The Family view supports:
 
 | Capability | What the user receives | Implementation |
 |---|---|---|
-| Account security | Email registration, verification, login, logout | AWS Cognito + Amplify |
+| Account security | Email registration, verification, login, logout | Firebase Authentication |
 | Universal ride control | One persistent Start/End button | Flutter controller and Android foreground service |
 | Speed monitoring | Live and maximum speed in km/h | Android GPS through Geolocator |
-| Location tracking | Interactive rider-following map, ride trail, coordinates, and cloud heartbeats | OpenStreetMap + Flutter Map + GPS + API Gateway + Lambda + DynamoDB |
+| Location tracking | Interactive rider-following map, ride trail, coordinates, and cloud heartbeats | Google Maps Flutter + GPS + Azure Functions + Cosmos DB |
 | Ride distance | Distance accumulated along GPS route points | On-device route calculation |
 | Rider behavior | Harsh acceleration, braking, and sharp-turn events | Accelerometer/gyroscope rules |
-| Accident assistance | Impact alert, 20-second cancellation, automatic SOS | Motion analysis + Lambda + SNS |
+| Accident assistance | Impact alert, 20-second cancellation, automatic SOS | Motion analysis + Azure Functions + Cosmos DB |
 | Manual SOS | Rider-triggered emergency with latest position | Authenticated emergency API |
-| Helmet check | Camera photo assessment and confidence result | Pretrained AWS Rekognition PPE model |
-| Nearby hospitals | Medical places near the current GPS fix | Amazon Location Places |
-| Traffic route estimate | Scooter route distance and duration | Amazon Location Routes |
+| Helmet check | Camera photo assessment and confidence result | Azure OpenAI GPT-4.1 Vision |
+| Nearby hospitals | Medical places near the current GPS fix | Google Places API (New) |
+| Traffic route estimate | Two-wheeler route distance and duration | Google Routes API |
 | Safety score | Clear 0–100 score affected by risk events | Deterministic, explainable scoring |
-| Ride history | Private completed-ride summaries | DynamoDB |
-| Family sharing | Invitation-based rider/guardian relationship | Cognito identity + DynamoDB permissions |
+| Ride history | Private completed-ride summaries | Azure Cosmos DB |
+| Family sharing | Invitation-based rider/guardian relationship | Firebase identity + Cosmos DB permissions |
 | Family status | Rider state, speed, score, time, and location | Permission-checked API |
 | Resource control | Sensors and heartbeats stop after End ride | Central ride lifecycle controller |
 
@@ -154,23 +159,20 @@ The Family view supports:
 
 ```mermaid
 flowchart LR
-    R[Rider's Android phone] -->|Secure Cognito token| API[Amazon API Gateway]
+    R[Rider's Android phone] -->|Firebase ID token| API[Azure Functions]
     R -->|GPS and motion| APP[Flutter safety engine]
     APP -->|Ride updates| API
-    API --> L[AWS Lambda]
-    L --> D[(Encrypted DynamoDB)]
-    L --> REK[AWS Rekognition]
-    L --> LOC[Amazon Location]
-    L --> SNS[Amazon SNS]
+    API --> D[(Azure Cosmos DB)]
+    API --> AOAI[Azure OpenAI Vision]
+    API --> GM[Google Places and Routes]
     F[Approved family account] -->|Permission-checked request| API
-    D --> L
-    L -->|Authorized rider status| F
+    D --> API
+    API -->|Authorized rider status| F
 ```
 
 ### Why the backend does not need a separate “power” switch
 
-The AWS backend is serverless. API Gateway and Lambda do not run as a permanent
-server waiting on a virtual machine. They perform work only when the app sends a
+The Azure backend is serverless. Azure Functions runs only when the app sends a
 request. Therefore, the app's universal button controls the parts that actually
 consume continuous phone resources:
 
@@ -181,39 +183,35 @@ consume continuous phone resources:
 | Status is safe/paused | Status is riding | Final safe status published |
 | No ride timer | Timer and score active | Summary saved to history |
 
-## AWS architecture
+## Hybrid cloud architecture
 
-The deployed CloudFormation stack is **rideguardian-backend** in
-**ap-south-1**.
-
-| AWS service | Responsibility |
+| Cloud service | Responsibility |
 |---|---|
-| Cognito User Pool | Accounts, verified email, secure tokens |
-| API Gateway HTTP API | Public health route and JWT-protected app routes |
-| Lambda (Python 3.13, ARM64) | Application logic and authorization checks |
-| DynamoDB | Live state, ride history, invitations, relationships, alerts |
-| Rekognition | Pretrained helmet/protective-equipment assessment |
-| Amazon Location | Nearby hospitals and scooter routes |
-| SNS | Encrypted emergency-alert topic |
-| CloudFormation/SAM | Repeatable infrastructure deployment |
+| Firebase Authentication | Verified email or phone accounts and ID tokens |
+| Google Maps SDK for Android | Interactive map in the Flutter app |
+| Google Places API (New) | Nearby hospital discovery |
+| Google Routes API | Two-wheeler route distance, duration, and polyline |
+| Azure Functions | Serverless authenticated application API |
+| Azure Cosmos DB | Live state, history, invitations, relationships, and alerts |
+| Azure OpenAI GPT-4.1 | Vision-based helmet assessment |
+| Azure Application Insights | Backend logs and operational diagnostics |
+| Firebase Cloud Messaging | Background SOS and invitation notifications |
 
 Backend safeguards include:
 
 - JWT authentication on every private endpoint;
 - permission checks for family access;
-- no AWS keys or user passwords inside the APK;
-- DynamoDB encryption at rest;
-- DynamoDB point-in-time recovery;
-- retained database protection during stack replacement/deletion;
-- pay-per-request storage;
-- encrypted SNS topic;
-- least-scope Lambda service permissions.
+- Firebase JWT validation on every private API route;
+- restricted Android and server Google Maps API keys;
+- no Azure service keys or user passwords inside the APK;
+- Cosmos DB encryption at rest and serverless capacity;
+- Azure secrets stored as Function App settings.
 
-## Pretrained AI—no model training required
+## Vision AI - no model training required
 
-RideGuardian calls the pretrained AWS Rekognition protective-equipment
-capability for helmet assessment. No custom training pipeline or training
-dataset is required for the MVP.
+RideGuardian sends a captured image to Azure OpenAI GPT-4.1 Vision for helmet
+assessment. No custom training pipeline or dataset is required for the MVP,
+although this must not be treated as a certified safety decision.
 
 Speed, motion, and possible-impact detection are deterministic phone-sensor
 rules. This makes their decisions understandable and keeps ride monitoring
@@ -233,7 +231,7 @@ responsive even when network quality is poor.
 ### Rider
 
 1. Create an account using an accessible email address.
-2. Enter the email verification code sent by Cognito.
+2. Open the verification link sent by Firebase.
 3. Sign in and allow location, camera, motion, and notification permissions.
 4. Press **Start ride safety systems**.
 5. Open Live, Safety, or Family while the master control continues running.
@@ -252,12 +250,15 @@ with a clear, well-lit photo containing the rider's head and helmet.
 
 ## Current delivery status
 
-- AWS stack: deployed and healthy
-- CloudFormation status: `UPDATE_COMPLETE`
+- Azure Functions backend: deployed and healthy
+- Firebase project: `rideguardian-ai-617db5`
+- Azure Cosmos DB and Azure OpenAI: configured
+- Google Maps, Places, and Routes: active billing; live requests tested
+- Firebase Cloud Messaging: real background SOS delivered to guardian emulator
 - Public API health check: HTTP 200
 - Flutter analyzer: no issues
 - Flutter tests: passing
-- Client screenshot render test: passing at 430 × 932
+- Rider/guardian contract and permission tests: passing
 - Android debug APK: built successfully
 
 The debug APK is located at:
@@ -266,11 +267,10 @@ The debug APK is located at:
 build/app/outputs/flutter-apk/app-debug.apk
 ```
 
-SHA-256:
+Use `Get-FileHash build/app/outputs/flutter-apk/app-debug.apk` for the current checksum.
 
-```text
-106E963A23C5118725CCC39C58D133027C01A43E9FE17C5E1CFEFDA20EF29755
-```
+See [rider and guardian testing](docs/RIDER_GUARDIAN_TESTING.md) for setup,
+verification results, and notification behavior.
 
 ## Important production notes
 
@@ -279,9 +279,10 @@ medical device. Before public release:
 
 1. Calibrate impact and behavior thresholds through controlled, consented road
    testing across different phones and motorcycles.
-2. Configure an SMS and/or Firebase Cloud Messaging delivery channel. The
-   current build stores emergency alerts and shows them inside the authenticated
-   Family view; SNS is provisioned but has no customer phone subscriptions.
+2. Test notification permissions and battery restrictions on each supported
+   phone. FCM push and in-app alerts are implemented; emergency SMS and automated
+   emergency-service calls are not implemented. Android force-stop and lack of
+   internet can prevent push delivery.
 3. Add clear consent, privacy, retention, and account-deletion workflows.
 4. Complete background-location policy review for Google Play.
 5. Add device-level integration tests, accessibility testing, and release
@@ -294,8 +295,8 @@ Prerequisites:
 
 - Flutter SDK
 - Android Studio and Android SDK
-- AWS CLI with the `rideguardian-admin` Identity Center profile
-- AWS SAM CLI
+- Firebase CLI and Google Cloud CLI
+- Azure CLI and Azure Functions Core Tools
 
 ```powershell
 C:\src\flutter\bin\flutter.bat pub get
@@ -310,17 +311,15 @@ Regenerate the client screenshots after a visual change:
 C:\src\flutter\bin\flutter.bat test tool\generate_readme_screenshots_test.dart --update-goldens
 ```
 
-Deploy the backend:
+Deploy the Azure backend:
 
 ```powershell
-cd backend
-sam build
-sam deploy --profile rideguardian-admin --region ap-south-1
+cd azure_backend
+func azure functionapp publish rideguardian-api-617db5 --python
 ```
 
-The deployed mobile configuration is in
-`lib/config/aws_config.dart`. Another API can be supplied without changing
-source code:
+The deployed mobile configuration is in `lib/config/cloud_config.dart`.
+Another API can be supplied without changing source code:
 
 ```powershell
 C:\src\flutter\bin\flutter.bat run --dart-define=API_BASE_URL=https://YOUR_API/v1
@@ -328,7 +327,8 @@ C:\src\flutter\bin\flutter.bat run --dart-define=API_BASE_URL=https://YOUR_API/v
 
 ## API routes
 
-Only `GET /health` is public. Every other route requires a valid Cognito JWT.
+Only `GET /health` is public. Every other route requires a verified Firebase ID
+token.
 
 | Method | Route | Purpose |
 |---|---|---|
@@ -351,16 +351,16 @@ Only `GET /health` is public. Every other route requires a valid Cognito JWT.
 
 ```text
 lib/
-├── config/          Deployed AWS identifiers
+├── config/          Firebase and Azure API identifiers
 ├── controllers/     Authentication and ride lifecycle state
 ├── models/          Ride, guardian, route, and alert models
 ├── screens/         Sign-in and five-tab application UI
-├── services/        Cognito, backend API, GPS, and sensor integration
+├── services/        Firebase Auth, Azure API, GPS, and sensor integration
 └── theme/           Material 3 design system
 
-backend/
-├── src/app.py       Lambda application
-└── template.yaml    SAM/CloudFormation infrastructure
+azure_backend/
+├── function_app.py  Azure Functions application
+└── requirements.txt Python runtime dependencies
 
 docs/images/         Real rendered client walkthrough frames
 test/                Normal Flutter widget tests

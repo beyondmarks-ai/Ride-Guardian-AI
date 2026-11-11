@@ -74,7 +74,10 @@ class RideSummary {
     distanceKm: (json['distanceKm'] as num?)?.toDouble() ?? 0,
     maxSpeedKph: (json['maxSpeedKph'] as num?)?.toDouble() ?? 0,
     safetyScore: (json['safetyScore'] as num?)?.toInt() ?? 100,
-    eventCount: (json['events'] as List<dynamic>?)?.length ?? 0,
+    eventCount:
+        (json['eventCount'] as num?)?.toInt() ??
+        (json['events'] as List<dynamic>?)?.length ??
+        0,
   );
 }
 
@@ -124,6 +127,22 @@ class FamilyMember {
   }
 }
 
+class SharingRequest {
+  const SharingRequest({
+    required this.guardianId,
+    required this.guardianContact,
+    required this.contact,
+  });
+  final String guardianId;
+  final String guardianContact;
+  final String contact;
+  factory SharingRequest.fromJson(Map<String, dynamic> json) => SharingRequest(
+    guardianId: json['guardianId'] as String,
+    guardianContact: json['guardianContact'] as String,
+    contact: json['contact'] as String,
+  );
+}
+
 class GuardianInvitation {
   const GuardianInvitation({required this.riderId, required this.riderEmail});
 
@@ -164,11 +183,13 @@ class SafetyAlert {
     required this.riderId,
     required this.reason,
     required this.timestamp,
+    this.riderName = 'Rider',
     this.latitude,
     this.longitude,
   });
 
   final String riderId;
+  final String riderName;
   final String reason;
   final DateTime timestamp;
   final double? latitude;
@@ -176,12 +197,26 @@ class SafetyAlert {
 
   factory SafetyAlert.fromJson(Map<String, dynamic> json) => SafetyAlert(
     riderId: json['riderId'] as String? ?? '',
+    riderName: json['riderName'] as String? ?? 'Rider',
     reason: json['reason'] as String? ?? 'Emergency alert',
     timestamp:
         DateTime.tryParse(json['timestamp'] as String? ?? '') ?? DateTime.now(),
     latitude: (json['latitude'] as num?)?.toDouble(),
     longitude: (json['longitude'] as num?)?.toDouble(),
   );
+}
+
+class HelmetResult {
+  const HelmetResult({
+    required this.detected,
+    required this.confidence,
+    required this.reason,
+    required this.strapStatus,
+  });
+  final bool detected;
+  final double confidence;
+  final String reason;
+  final String strapStatus;
 }
 
 class NearbyPlace {

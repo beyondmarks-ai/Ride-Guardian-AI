@@ -1,0 +1,15 @@
+name: rideguardian-helmet
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - libxcb
+  - libgl
+  - glib
+  - pip:
+      - azureml-inference-server-http==1.4.0
+      - numpy==2.1.3
+      - opencv-python-headless==4.10.0.84
+      - Pillow==11.1.0
+      - ultralytics==8.3.228

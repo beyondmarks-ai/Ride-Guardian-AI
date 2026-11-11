@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RideGuardian Helmet Check</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+    body { margin: 0; background: #081411; color: #edf8f4; display: grid; min-height: 100vh; place-items: center; }
+    main { width: min(1050px, 94vw); }
+    h1 { margin-bottom: 6px; }
+    p { color: #a9c5bc; }
+    .grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 20px; }
+    .camera { position: relative; background: #000; border-radius: 20px; overflow: hidden; aspect-ratio: 16/9; }
+    video { position: absolute; width: 100%; height: 100%; object-fit: cover; }
+    .panel { background: #10231d; border: 1px solid #24483d; border-radius: 20px; padding: 24px; }
+    .status { font-size: 1.7rem; font-weight: 750; margin: 18px 0 8px; }
+    .helmet { color: #56e39f; } .no_helmet { color: #ff6b6b; } .uncertain { color: #ffd166; }
+    .meter { height: 12px; border-radius: 99px; background: #244039; overflow: hidden; margin-top: 14px; }
+    .meter > div { height: 100%; width: 0; background: #56e39f; transition: width .2s; }
+    button { margin-top: 20px; width: 100%; padding: 13px; border: 0; border-radius: 12px; background: #37c987; color: #052018; font-weight: 750; cursor: pointer; }
+    button:disabled { cursor: wait; opacity: .65; }
+    small { color: #8eaaa1; display: block; margin-top: 16px; line-height: 1.5; }
+    @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>RideGuardian helmet check</h1>
+  <p>One camera frame is analysed securely by Azure Vision only when you press Verify.</p>
+  <div class="grid">
+    <div class="camera"><video id="video" autoplay muted playsinline></video></div>
+    <section class="panel">
+      <div>Verification result</div>
+      <div id="status" class="status uncertain">Camera starting...</div>
+      <div id="detail">Face the camera with your full helmet visible.</div>
+      <div class="meter"><div id="meter"></div></div>
+      <button id="verify">Verify helmet with Azure Vision</button>
+      <small>This is a single-frame, metered Azure AI request. Continuous video is not uploaded.</small>
+    </section>
+  </div>
+</main>
+<script>
+const video = document.querySelector('#video');
+const statusEl = document.querySelector('#status');
+const detailEl = document.querySelector('#detail');
+const meter = document.querySelector('#meter');
+const verifyButton = document.querySelector('#verify');
+const capture = document.createElement('canvas');
+
+function labelText(value) {
+  return value === 'helmet' ? 'Helmet detected' : 'No helmet detected';
+}
+
+async function start() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: {width: {ideal: 1280}, height: {ideal: 720}, facingMode: 'user'},
+    audio: false
+  });
+  video.srcObject = stream;
+  await video.play();
+  statusEl.textContent = 'Ready to verify';
+  detailEl.textContent = 'Press the button when your helmet is clearly visible.';
+}
+
+verifyButton.onclick = async () => {
+  if (video.readyState < 2) return;
+  verifyButton.disabled = true;
+  statusEl.className = 'status uncertain';
+  statusEl.textContent = 'Verifying with Azure...';
+  detailEl.textContent = 'Analysing the current camera frame.';
+  try {
+    capture.width = video.videoWidth;
+    capture.height = video.videoHeight;
+    capture.getContext('2d').drawImage(video, 0, 0);
+    const blob = await new Promise(resolve => capture.toBlob(resolve, 'image/jpeg', 0.88));
+    const body = new FormData();
+    body.append('frame', blob, 'vision-frame.jpg');
+    const response = await fetch('/verify-vision', {method: 'POST', body});
+    if (!response.ok) throw new Error(await response.text());
+    const result = await response.json();
+    const percent = Math.round(result.confidence * 100);
+    statusEl.className = `status ${result.status}`;
+    statusEl.textContent = labelText(result.status);
+    detailEl.textContent = `${percent}% - ${result.reason}`;
+    meter.style.width = `${percent}%`;
+    meter.style.background = result.status === 'helmet' ? '#56e39f' : '#ff6b6b';
+  } catch (error) {
+    statusEl.className = 'status no_helmet';
+    statusEl.textContent = 'Verification failed';
+    detailEl.textContent = error.message;
+    meter.style.width = '0';
+  } finally {
+    verifyButton.disabled = false;
+  }
+};
+
+start().catch(error => {
+  statusEl.textContent = 'Camera permission required';
+  detailEl.textContent = error.message;
+});
+</script>
+</body>
+</html>

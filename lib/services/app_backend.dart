@@ -3,15 +3,22 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 
-import '../config/aws_config.dart';
+import '../config/cloud_config.dart';
 import '../models/ride_models.dart';
+
+class BackendException implements Exception {
+  const BackendException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
 
 class AppBackend {
   AppBackend({http.Client? client}) : _client = client ?? http.Client();
 
   static const String baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: AwsConfig.apiBaseUrl,
+    defaultValue: CloudConfig.azureApiBaseUrl,
   );
   final http.Client _client;
   String? _sessionToken;
@@ -32,8 +39,8 @@ class AppBackend {
     };
   }
 
-  void setSessionToken(String? cognitoJwt) {
-    _sessionToken = cognitoJwt;
+  void setSessionToken(String? firebaseIdToken) {
+    _sessionToken = firebaseIdToken;
   }
 
   void setTokenProvider(Future<String?> Function()? provider) {
@@ -68,14 +75,25 @@ class AppBackend {
   Future<void> publishEmergency({
     required RidePoint? point,
     required String reason,
+    String? requestId,
   }) async {
-    if (!isConfigured) return;
-    await _post('/emergency', {
+    await sendEmergency(point: point, reason: reason, requestId: requestId);
+  }
+
+  Future<Map<String, dynamic>> sendEmergency({
+    required RidePoint? point,
+    required String reason,
+    String? requestId,
+  }) => request(
+    '/emergency',
+    method: 'POST',
+    body: {
       'reason': reason,
+      'requestId': requestId ?? 'sos-${DateTime.now().microsecondsSinceEpoch}',
       'timestamp': DateTime.now().toUtc().toIso8601String(),
       if (point != null) ...point.toJson(),
-    });
-  }
+    },
+  );
 
   Future<void> saveRide({
     required RideSummary summary,
@@ -106,40 +124,49 @@ class AppBackend {
         'lng': longitude.toString(),
       },
     );
-    try {
-      final response = await _client
-          .get(uri, headers: await _headers())
-          .timeout(const Duration(seconds: 8));
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        return const [];
-      }
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
-      final items = body['items'] as List<dynamic>? ?? const [];
-      return items
-          .whereType<Map<String, dynamic>>()
-          .map(NearbyPlace.fromJson)
-          .toList();
-    } catch (_) {
-      return const [];
-    }
+    final body = await requestUri(uri);
+    final items = body['items'] as List<dynamic>? ?? const [];
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map(NearbyPlace.fromJson)
+        .toList();
   }
 
-  Future<double?> checkHelmet(XFile image) async {
-    if (!isConfigured) return null;
-    try {
-      final response = await _client
-          .post(
-            Uri.parse('$baseUrl/helmet-check'),
-            headers: await _headers(contentType: 'image/jpeg'),
-            body: await image.readAsBytes(),
-          )
-          .timeout(const Duration(seconds: 15));
-      if (response.statusCode < 200 || response.statusCode >= 300) return null;
-      final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-      return (decoded['confidence'] as num?)?.toDouble();
-    } catch (_) {
-      return null;
+  Future<HelmetResult> checkHelmet(XFile image) async {
+    if (!isConfigured) {
+      throw const BackendException('Helmet service is not configured.');
     }
+    final response = await _client
+        .post(
+          Uri.parse('$baseUrl/helmet-check'),
+          headers: await _headers(contentType: 'image/jpeg'),
+          body: await image.readAsBytes(),
+        )
+        .timeout(const Duration(seconds: 75));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw BackendException(
+        'Helmet check could not complete (HTTP ${response.statusCode}). Check your connection and retry.',
+      );
+    }
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    final confidence = (decoded['confidence'] as num?)?.toDouble();
+    if (decoded['detected'] is! bool ||
+        confidence == null ||
+        !confidence.isFinite ||
+        confidence < 0 ||
+        confidence > 100) {
+      throw const BackendException(
+        'Helmet service returned an invalid result. Retake the photo.',
+      );
+    }
+    return HelmetResult(
+      detected: decoded['detected'] == true && confidence >= 80,
+      confidence: confidence,
+      reason:
+          decoded['reason'] as String? ??
+          'Retake the photo with your whole helmet visible.',
+      strapStatus: decoded['strapStatus'] as String? ?? 'not_visible',
+    );
   }
 
   Future<RoutePlan?> routeTo({
@@ -155,25 +182,17 @@ class AppBackend {
         'destinationLng': destination.longitude.toString(),
       },
     );
-    try {
-      final response = await _client
-          .get(uri, headers: await _headers())
-          .timeout(const Duration(seconds: 12));
-      if (response.statusCode < 200 || response.statusCode >= 300) return null;
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
-      final routes = body['Routes'] as List<dynamic>? ?? const [];
-      if (routes.isEmpty) return null;
-      final summary =
-          (routes.first as Map<String, dynamic>)['Summary']
-              as Map<String, dynamic>;
-      return RoutePlan(
-        destination: destination,
-        distanceKm: ((summary['Distance'] as num?) ?? 0) / 1000,
-        durationMinutes: (((summary['Duration'] as num?) ?? 0) / 60).ceil(),
-      );
-    } catch (_) {
-      return null;
-    }
+    final body = await requestUri(uri);
+    final routes = body['Routes'] as List<dynamic>? ?? const [];
+    if (routes.isEmpty) return null;
+    final summary =
+        (routes.first as Map<String, dynamic>)['Summary']
+            as Map<String, dynamic>;
+    return RoutePlan(
+      destination: destination,
+      distanceKm: ((summary['Distance'] as num?) ?? 0) / 1000,
+      durationMinutes: (((summary['Duration'] as num?) ?? 0) / 60).ceil(),
+    );
   }
 
   Future<List<RideSummary>> fetchRides() async {
@@ -210,13 +229,35 @@ class AppBackend {
     return items.map(GuardianInvitation.fromJson).toList();
   }
 
+  Future<List<SharingRequest>> fetchGuardianRequests() async =>
+      (await _getItems(
+        '/guardian-requests',
+      )).map(SharingRequest.fromJson).toList();
+  Future<List<SharingRequest>> fetchPendingRequests() async => (await _getItems(
+    '/riders/requests',
+  )).map(SharingRequest.fromJson).toList();
+  Future<List<RideSummary>> fetchRiderHistory(String riderId) async {
+    final uri = Uri.parse(
+      '$baseUrl/rider-rides',
+    ).replace(queryParameters: {'riderId': riderId});
+    final result = await requestUri(uri);
+    return (result['items'] as List<dynamic>? ?? [])
+        .map((r) => RideSummary.fromJson(r as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<List<SafetyAlert>> fetchAlerts() async {
     final items = await _getItems('/alerts');
     return items.map(SafetyAlert.fromJson).toList();
   }
 
-  Future<bool> inviteGuardian(String email) =>
-      _postSuccess('/guardians/invite', {'email': email.trim().toLowerCase()});
+  Future<bool> inviteGuardian(String email) => _postSuccess(
+    '/guardians/invite',
+    {'contact': email.trim().toLowerCase()},
+  );
+
+  Future<void> removeGuardian(String guardianId) =>
+      _post('/guardians/remove', {'guardianId': guardianId});
 
   Future<bool> acceptInvitation(String riderId) =>
       _postSuccess('/guardians/accept', {'riderId': riderId});
@@ -226,44 +267,26 @@ class AppBackend {
     final uri = Uri.parse(
       '$baseUrl/rider-status',
     ).replace(queryParameters: {'riderId': rider.userId});
-    try {
-      final response = await _client
-          .get(uri, headers: await _headers())
-          .timeout(const Duration(seconds: 8));
-      if (response.statusCode < 200 || response.statusCode >= 300) return null;
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
-      final status = body['status'] as Map<String, dynamic>?;
-      return SharedRiderStatus(
-        riderId: rider.userId!,
-        name: rider.name,
-        status: status?['status'] as String? ?? 'OFFLINE',
-        updatedAt: DateTime.tryParse(status?['updatedAt'] as String? ?? ''),
-        latitude: (status?['latitude'] as num?)?.toDouble(),
-        longitude: (status?['longitude'] as num?)?.toDouble(),
-        speedKph: (status?['speedKph'] as num?)?.toDouble() ?? 0,
-        safetyScore: (status?['safetyScore'] as num?)?.toInt() ?? 100,
-      );
-    } catch (_) {
-      return null;
-    }
+    final body = await requestUri(uri);
+    final status = body['status'] as Map<String, dynamic>?;
+    return SharedRiderStatus(
+      riderId: rider.userId!,
+      name: rider.name,
+      status: status?['status'] as String? ?? 'OFFLINE',
+      updatedAt: DateTime.tryParse(status?['updatedAt'] as String? ?? ''),
+      latitude: (status?['latitude'] as num?)?.toDouble(),
+      longitude: (status?['longitude'] as num?)?.toDouble(),
+      speedKph: (status?['speedKph'] as num?)?.toDouble() ?? 0,
+      safetyScore: (status?['safetyScore'] as num?)?.toInt() ?? 100,
+    );
   }
 
   Future<List<Map<String, dynamic>>> _getItems(String path) async {
     if (!isConfigured) return const [];
-    try {
-      final response = await _client
-          .get(Uri.parse('$baseUrl$path'), headers: await _headers())
-          .timeout(const Duration(seconds: 8));
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        return const [];
-      }
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
-      return (body['items'] as List<dynamic>? ?? const [])
-          .whereType<Map<String, dynamic>>()
-          .toList();
-    } catch (_) {
-      return const [];
-    }
+    final body = await request(path);
+    return (body['items'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
   }
 
   Future<void> _post(String path, Map<String, Object?> body) async {
@@ -271,18 +294,48 @@ class AppBackend {
   }
 
   Future<bool> _postSuccess(String path, Map<String, Object?> body) async {
+    await request(path, method: 'POST', body: body);
+    return true;
+  }
+
+  Future<Map<String, dynamic>> request(
+    String path, {
+    String method = 'GET',
+    Map<String, Object?>? body,
+  }) => requestUri(Uri.parse('$baseUrl$path'), method: method, body: body);
+
+  Future<Map<String, dynamic>> requestUri(
+    Uri uri, {
+    String method = 'GET',
+    Map<String, Object?>? body,
+  }) async {
     try {
-      final response = await _client
-          .post(
-            Uri.parse('$baseUrl$path'),
-            headers: await _headers(),
-            body: jsonEncode(body),
-          )
-          .timeout(const Duration(seconds: 8));
-      return response.statusCode >= 200 && response.statusCode < 300;
+      final outgoing = http.Request(method, uri)
+        ..headers.addAll(await _headers());
+      if (body != null) outgoing.body = jsonEncode(body);
+      final response = await http.Response.fromStream(
+        await _client.send(outgoing).timeout(const Duration(seconds: 35)),
+      ).timeout(const Duration(seconds: 35));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        if (response.statusCode == 401) {
+          throw const BackendException('Your session expired. Sign in again.');
+        }
+        Map<String, dynamic>? error;
+        try {
+          error = jsonDecode(response.body) as Map<String, dynamic>;
+        } catch (_) {}
+        throw BackendException(
+          error?['message'] as String? ??
+              'The service could not complete this request (${response.statusCode}).',
+        );
+      }
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } on BackendException {
+      rethrow;
     } catch (_) {
-      // Ride monitoring must never fail because the cloud is unreachable.
-      return false;
+      throw const BackendException(
+        'Unable to reach the server. Check your connection and retry.',
+      );
     }
   }
 

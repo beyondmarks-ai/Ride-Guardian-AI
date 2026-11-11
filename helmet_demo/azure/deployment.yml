@@ -1,0 +1,17 @@
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.schema.json
+name: helmet-v1
+endpoint_name: guardian-object-detector-617db5
+model: azureml:rideguardian-helmet-yolov8n:1
+code_configuration:
+  code: .
+  scoring_script: score.py
+environment: azureml:rideguardian-helmet-inference:2
+instance_type: Standard_DS2_v2
+instance_count: 1
+request_settings:
+  request_timeout_ms: 90000
+  max_concurrent_requests_per_instance: 1
+liveness_probe:
+  initial_delay: 60
+readiness_probe:
+  initial_delay: 60

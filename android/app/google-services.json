@@ -1,0 +1,19 @@
+{
+  "project_info": {
+    "project_number": "420885406823",
+    "project_id": "rideguardian-ai-617db5",
+    "storage_bucket": "rideguardian-ai-617db5.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:420885406823:android:211d321ca9a71ad2fae0c2",
+        "android_client_info": {"package_name": "com.gndec.rideguardian"}
+      },
+      "oauth_client": [],
+      "api_key": [{"current_key": "AIzaSyCyLV51KwYRzOrkOIgWLpoIAzJpV9TJIOI"}],
+      "services": {"appinvite_service": {"other_platform_oauth_client": []}}
+    }
+  ],
+  "configuration_version": "1"
+}

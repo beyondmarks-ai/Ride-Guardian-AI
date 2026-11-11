@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart' show LatLng;
+import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../config/project_identity.dart';
 import '../controllers/ride_controller.dart';
 import '../models/ride_models.dart';
+import '../services/app_backend.dart';
 import '../theme/app_theme.dart';
+import 'guardian_dashboard.dart';
+import 'hospital_sheet.dart';
+import 'sharing_requests.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({
@@ -27,6 +31,7 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int index = 0;
+  int _lastNotification = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -34,6 +39,17 @@ class _AppShellState extends State<AppShell> {
       listenable: widget.controller,
       builder: (context, _) {
         final controller = widget.controller;
+        if (controller.notificationOpenCount != _lastNotification) {
+          _lastNotification = controller.notificationOpenCount;
+          index = 4;
+        }
+        if (controller.isGuardianView && !controller.isRiding) {
+          return GuardianDashboard(
+            controller: controller,
+            mapTilesEnabled: widget.mapTilesEnabled,
+            onSignOut: widget.onSignOut,
+          );
+        }
         return Scaffold(
           body: Stack(
             children: [
@@ -63,7 +79,10 @@ class _AppShellState extends State<AppShell> {
           bottomNavigationBar: _BottomPanel(
             controller: controller,
             index: index,
-            onSelect: (value) => setState(() => index = value),
+            onSelect: (value) {
+              if (value == 4) controller.refreshCloudData();
+              setState(() => index = value);
+            },
           ),
         );
       },
@@ -97,9 +116,21 @@ class _BottomPanel extends StatelessWidget {
                 height: 54,
                 width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed: controller.isStarting
+                  onPressed: controller.isGuardianView && !controller.isRiding
+                      ? () {
+                          onSelect(4);
+                        }
+                      : controller.isStarting
                       ? null
-                      : controller.toggleRide,
+                      : () async {
+                          if (controller.isRiding) {
+                            await controller.stopRide();
+                          } else if (!controller.canStartRide) {
+                            await _showHelmetCheck(context, controller);
+                          } else {
+                            await controller.startRide();
+                          }
+                        },
                   style: FilledButton.styleFrom(
                     backgroundColor: controller.isRiding
                         ? AppColors.danger
@@ -123,10 +154,14 @@ class _BottomPanel extends StatelessWidget {
                         ),
                   label: Text(
                     controller.isStarting
-                        ? 'Starting safety systems…'
+                        ? 'Starting safety systems...'
                         : controller.isRiding
-                        ? 'End ride · ${_duration(controller.elapsed)}'
-                        : 'Start ride safety systems',
+                        ? 'End ride - ${_duration(controller.elapsed)}'
+                        : controller.isGuardianView
+                        ? 'View my riders and SOS alerts'
+                        : controller.canStartRide
+                        ? 'Start ride safety systems'
+                        : 'Check helmet to start ride',
                   ),
                 ),
               ),
@@ -180,6 +215,7 @@ class _HomeScreen extends StatelessWidget {
       title: 'Good evening, ${_displayName(username)}',
       subtitle: 'Ready for a safer ride?',
       children: [
+        GuardianRequestInbox(controller: controller),
         if (controller.errorMessage != null) ...[
           _ErrorBanner(
             message: controller.errorMessage!,
@@ -223,7 +259,7 @@ class _HomeScreen extends StatelessWidget {
                 title: 'Helmet check',
                 detail: _helmetLabel(controller),
                 done: controller.helmetState == HelmetCheckState.detected,
-                onTap: controller.runHelmetCheck,
+                onTap: () => _showHelmetCheck(context, controller),
               ),
               const Divider(height: 1, indent: 62),
               _CheckRow(
@@ -235,11 +271,11 @@ class _HomeScreen extends StatelessWidget {
                 done: controller.currentPosition != null,
               ),
               const Divider(height: 1, indent: 62),
-              const _CheckRow(
+              _CheckRow(
                 icon: Icons.people_alt_rounded,
                 title: 'Family sharing',
-                detail: '2 trusted guardians can follow',
-                done: true,
+                detail: '${controller.family.length} connected guardians',
+                done: controller.family.isNotEmpty,
               ),
             ],
           ),
@@ -254,7 +290,7 @@ class _HomeScreen extends StatelessWidget {
                 icon: Icons.local_hospital_rounded,
                 label: 'Hospitals',
                 color: AppColors.danger,
-                onTap: controller.loadHospitals,
+                onTap: () => _showOwnHospitals(context, controller),
               ),
             ),
             const SizedBox(width: 10),
@@ -263,7 +299,7 @@ class _HomeScreen extends StatelessWidget {
                 icon: Icons.sports_motorsports_rounded,
                 label: 'Helmet',
                 color: AppColors.primary,
-                onTap: controller.runHelmetCheck,
+                onTap: () => _showHelmetCheck(context, controller),
               ),
             ),
             const SizedBox(width: 10),
@@ -349,7 +385,9 @@ class _RideHero extends StatelessWidget {
           Text(
             controller.isRiding
                 ? '${controller.speedKph.toStringAsFixed(0)} km/h'
-                : 'All systems ready',
+                : controller.canStartRide
+                ? 'Ready to begin'
+                : 'Helmet check required',
             style: const TextStyle(
               color: Colors.white,
               fontSize: 31,
@@ -361,7 +399,9 @@ class _RideHero extends StatelessWidget {
           Text(
             controller.isRiding
                 ? '${controller.distanceKm.toStringAsFixed(1)} km covered · ${controller.events.length} risk events'
-                : 'One tap activates tracking, impact detection and family sharing.',
+                : controller.canStartRide
+                ? 'Start your ride to activate tracking and safety monitoring.'
+                : 'Verify your helmet and fasten your chin strap before starting.',
             style: TextStyle(
               color: Colors.white.withValues(alpha: .68),
               height: 1.4,
@@ -399,18 +439,19 @@ class _LiveScreen extends StatefulWidget {
 }
 
 class _LiveScreenState extends State<_LiveScreen> {
-  static const _fallbackCenter = LatLng(19.0760, 72.8777);
-  final MapController _mapController = MapController();
-  LatLng? _lastFollowedPosition;
+  static const _fallbackCenter = gmaps.LatLng(19.0760, 72.8777);
+  gmaps.GoogleMapController? _mapController;
+  gmaps.LatLng? _lastFollowedPosition;
+  double _currentZoom = 11;
   bool _mapReady = false;
   bool _followRider = true;
 
   RideController get controller => widget.controller;
 
-  LatLng? get _riderPosition {
+  gmaps.LatLng? get _riderPosition {
     final position = controller.currentPosition;
     if (position == null) return null;
-    return LatLng(position.latitude, position.longitude);
+    return gmaps.LatLng(position.latitude, position.longitude);
   }
 
   void _centerOnRider() {
@@ -424,16 +465,14 @@ class _LiveScreenState extends State<_LiveScreen> {
       return;
     }
     setState(() => _followRider = true);
-    _mapController.move(rider, 16);
+    _currentZoom = 16;
+    _mapController?.animateCamera(gmaps.CameraUpdate.newLatLngZoom(rider, 16));
   }
 
   void _zoomBy(double amount) {
     if (!_mapReady) return;
-    final camera = _mapController.camera;
-    _mapController.move(
-      camera.center,
-      (camera.zoom + amount).clamp(3, 19).toDouble(),
-    );
+    _currentZoom = (_currentZoom + amount).clamp(3, 20).toDouble();
+    _mapController?.animateCamera(gmaps.CameraUpdate.zoomTo(_currentZoom));
   }
 
   void _followLatestPosition() {
@@ -448,10 +487,11 @@ class _LiveScreenState extends State<_LiveScreen> {
     _lastFollowedPosition = rider;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_mapReady || !_followRider) return;
-      final zoom = _mapController.camera.zoom < 16
-          ? 16.0
-          : _mapController.camera.zoom;
-      _mapController.move(rider, zoom);
+      final zoom = _currentZoom < 16 ? 16.0 : _currentZoom;
+      _currentZoom = zoom;
+      _mapController?.animateCamera(
+        gmaps.CameraUpdate.newLatLngZoom(rider, zoom),
+      );
     });
   }
 
@@ -477,96 +517,79 @@ class _LiveScreenState extends State<_LiveScreen> {
                   fit: StackFit.expand,
                   children: [
                     if (widget.mapTilesEnabled)
-                      FlutterMap(
-                        mapController: _mapController,
-                        options: MapOptions(
-                          initialCenter: rider ?? _fallbackCenter,
-                          initialZoom: rider == null ? 11 : 16,
-                          minZoom: 3,
-                          maxZoom: 19,
-                          keepAlive: true,
-                          onMapReady: () {
-                            _mapReady = true;
-                            if (rider != null) {
-                              _lastFollowedPosition = rider;
-                              _mapController.move(rider, 16);
-                            }
-                          },
-                          onPositionChanged: (_, hasGesture) {
-                            if (hasGesture && _followRider && mounted) {
-                              setState(() => _followRider = false);
-                            }
-                          },
+                      gmaps.GoogleMap(
+                        initialCameraPosition: gmaps.CameraPosition(
+                          target: rider ?? _fallbackCenter,
+                          zoom: rider == null ? 11 : 16,
                         ),
-                        children: [
-                          TileLayer(
-                            urlTemplate:
-                                'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                            userAgentPackageName: 'com.example.bike_safety_ai',
-                            maxZoom: 19,
-                          ),
-                          if (controller.route.length > 1)
-                            PolylineLayer(
-                              polylines: [
-                                Polyline(
-                                  points: controller.route
-                                      .map(
-                                        (point) => LatLng(
-                                          point.latitude,
-                                          point.longitude,
-                                        ),
-                                      )
-                                      .toList(),
-                                  strokeWidth: 6,
-                                  color: AppColors.primary,
-                                  borderStrokeWidth: 2,
-                                  borderColor: Colors.white,
-                                ),
-                              ],
+                        minMaxZoomPreference: const gmaps.MinMaxZoomPreference(
+                          3,
+                          20,
+                        ),
+                        myLocationEnabled: rider != null,
+                        myLocationButtonEnabled: false,
+                        zoomControlsEnabled: false,
+                        mapToolbarEnabled: false,
+                        compassEnabled: false,
+                        onMapCreated: (mapController) {
+                          _mapController = mapController;
+                          _mapReady = true;
+                          _currentZoom = rider == null ? 11 : 16;
+                          if (rider != null) _lastFollowedPosition = rider;
+                        },
+                        onCameraMove: (position) {
+                          _currentZoom = position.zoom;
+                        },
+                        markers: {
+                          if (rider != null)
+                            gmaps.Marker(
+                              markerId: const gmaps.MarkerId('rider'),
+                              position: rider,
+                              infoWindow: const gmaps.InfoWindow(
+                                title: 'Current rider location',
+                              ),
+                              icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+                                gmaps.BitmapDescriptor.hueGreen,
+                              ),
                             ),
-                          MarkerLayer(
-                            markers: [
-                              if (rider != null)
-                                Marker(
-                                  point: rider,
-                                  width: 52,
-                                  height: 52,
-                                  child: const _RiderMapMarker(),
-                                ),
-                              ...controller.nearbyHospitals.map(
-                                (place) => Marker(
-                                  point: LatLng(
-                                    place.latitude,
-                                    place.longitude,
-                                  ),
-                                  width: 44,
-                                  height: 44,
-                                  child: Tooltip(
-                                    message: place.name,
-                                    child: GestureDetector(
-                                      onTap: () =>
-                                          controller.routeToHospital(place),
-                                      child: const _HospitalMapMarker(),
+                          ...controller.nearbyHospitals.map(
+                            (place) => gmaps.Marker(
+                              markerId: gmaps.MarkerId(
+                                'hospital:${place.latitude}:${place.longitude}',
+                              ),
+                              position: gmaps.LatLng(
+                                place.latitude,
+                                place.longitude,
+                              ),
+                              infoWindow: gmaps.InfoWindow(
+                                title: place.name,
+                                snippet:
+                                    '${place.distanceKm.toStringAsFixed(1)} km away',
+                                onTap: () => controller.routeToHospital(place),
+                              ),
+                              onTap: () => controller.routeToHospital(place),
+                              icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+                                gmaps.BitmapDescriptor.hueRed,
+                              ),
+                            ),
+                          ),
+                        },
+                        polylines: {
+                          if (controller.route.length > 1)
+                            gmaps.Polyline(
+                              polylineId: const gmaps.PolylineId('ride-route'),
+                              points: controller.route
+                                  .map(
+                                    (point) => gmaps.LatLng(
+                                      point.latitude,
+                                      point.longitude,
                                     ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          RichAttributionWidget(
-                            attributions: [
-                              TextSourceAttribution(
-                                'OpenStreetMap contributors',
-                                onTap: () => launchUrl(
-                                  Uri.parse(
-                                    'https://www.openstreetmap.org/copyright',
-                                  ),
-                                  mode: LaunchMode.externalApplication,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
+                                  )
+                                  .toList(),
+                              width: 6,
+                              color: AppColors.primary,
+                            ),
+                        },
                       )
                     else
                       CustomPaint(painter: _MapPainter()),
@@ -665,9 +688,11 @@ class _SafetyScreen extends StatelessWidget {
           icon: Icons.sports_motorsports_rounded,
           color: AppColors.primary,
           title: 'AI helmet check',
-          detail: 'Pretrained Rekognition head-cover assessment.',
+          detail:
+              controller.helmetMessage ??
+              'Take a clear photo wearing your motorcycle helmet.',
           status: _helmetLabel(controller),
-          onTap: controller.runHelmetCheck,
+          onTap: () => _showHelmetCheck(context, controller),
         ),
         const SizedBox(height: 10),
         _Tool(
@@ -676,7 +701,7 @@ class _SafetyScreen extends StatelessWidget {
           title: 'Nearby hospitals',
           detail: 'Medical care around your current position.',
           status: controller.hospitalsLoading ? 'Searching…' : 'Search',
-          onTap: controller.loadHospitals,
+          onTap: () => _showOwnHospitals(context, controller),
         ),
         const SizedBox(height: 10),
         _Tool(
@@ -684,8 +709,38 @@ class _SafetyScreen extends StatelessWidget {
           color: AppColors.amber,
           title: 'Emergency SOS',
           detail: 'Alert every trusted guardian with your location.',
-          status: controller.emergencySent ? 'Alert sent' : 'Send alert',
-          onTap: () => _confirmSos(context, controller),
+          status: controller.emergencySending
+              ? 'Sending…'
+              : controller.emergencySent
+              ? 'SOS saved'
+              : 'Send alert',
+          onTap: () {
+            if (!controller.emergencySending) _confirmSos(context, controller);
+          },
+        ),
+        if (controller.emergencyMessage != null) ...[
+          const SizedBox(height: 12),
+          Text(controller.emergencyMessage!),
+        ],
+        if (controller.errorMessage != null) ...[
+          const SizedBox(height: 12),
+          Text(
+            controller.errorMessage!,
+            style: const TextStyle(color: AppColors.danger),
+          ),
+        ],
+        ...controller.nearbyHospitals.map(
+          (hospital) => ListTile(
+            title: Text(hospital.name),
+            subtitle: Text('${hospital.distanceKm.toStringAsFixed(1)} km away'),
+            trailing: const Icon(Icons.directions),
+            onTap: () => launchUrl(
+              Uri.parse(
+                'https://www.google.com/maps/dir/?api=1&destination=${hospital.latitude},${hospital.longitude}',
+              ),
+              mode: LaunchMode.externalApplication,
+            ),
+          ),
         ),
         const SizedBox(height: 24),
         const _SectionTitle(title: 'Detection status', side: 'On-device'),
@@ -786,6 +841,38 @@ class _FamilyScreen extends StatelessWidget {
       title: 'Guardian circle',
       subtitle: 'You decide who can see your safety status',
       children: [
+        GuardianRequestInbox(controller: controller),
+        SegmentedButton<bool>(
+          segments: const [
+            ButtonSegment(
+              value: false,
+              label: Text('I am riding'),
+              icon: Icon(Icons.two_wheeler),
+            ),
+            ButtonSegment(
+              value: true,
+              label: Text('I am a guardian'),
+              icon: Icon(Icons.family_restroom),
+            ),
+          ],
+          selected: {controller.isGuardianView},
+          onSelectionChanged: (values) =>
+              controller.selectGuardianView(values.first),
+        ),
+        const SizedBox(height: 12),
+        const Text(
+          'Rider: invite a verified email or phone. Guardian: sign in using that same contact, accept below, then select the rider. Status refreshes every 10 seconds.',
+        ),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.notifications_active_outlined),
+          title: Text(
+            controller.notificationStatus,
+            style: const TextStyle(fontSize: 12),
+          ),
+          trailing: const Icon(Icons.refresh),
+          onTap: controller.enableNotifications,
+        ),
         Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
@@ -837,7 +924,29 @@ class _FamilyScreen extends StatelessWidget {
         ),
         if (controller.alerts.isNotEmpty) ...[
           const SizedBox(height: 14),
-          _GuardianAlertCard(alert: controller.alerts.first),
+          ...controller.alerts
+              .take(10)
+              .map(
+                (alert) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Column(
+                    children: [
+                      _GuardianAlertCard(alert: alert),
+                      if (alert.latitude != null && alert.longitude != null)
+                        TextButton.icon(
+                          onPressed: () => _showHospitalsNear(
+                            context,
+                            controller.backend,
+                            alert.latitude!,
+                            alert.longitude!,
+                          ),
+                          icon: const Icon(Icons.local_hospital),
+                          label: const Text('Hospitals near this SOS'),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
         ],
         const SizedBox(height: 24),
         _SectionTitle(
@@ -853,7 +962,38 @@ class _FamilyScreen extends StatelessWidget {
           ...controller.family.map(
             (member) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: _FamilyCard(member: member),
+              child: Column(
+                children: [
+                  _FamilyCard(member: member),
+                  TextButton(
+                    onPressed: () async {
+                      final remove = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: const Text('Stop sharing with this guardian?'),
+                          content: Text(
+                            '${member.name} will lose access to your status and alerts.',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, false),
+                              child: const Text('Cancel'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, true),
+                              child: const Text('Remove'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (remove == true) {
+                        await controller.removeGuardian(member);
+                      }
+                    },
+                    child: const Text('Remove sharing'),
+                  ),
+                ],
+              ),
             ),
           ),
         if (controller.invitations.isNotEmpty) ...[
@@ -912,6 +1052,18 @@ class _FamilyScreen extends StatelessWidget {
         if (controller.watchedRider != null) ...[
           const SizedBox(height: 12),
           _SharedRiderCard(status: controller.watchedRider!),
+          if (controller.watchedRider!.latitude != null &&
+              controller.watchedRider!.longitude != null)
+            OutlinedButton.icon(
+              onPressed: () => _showHospitalsNear(
+                context,
+                controller.backend,
+                controller.watchedRider!.latitude!,
+                controller.watchedRider!.longitude!,
+              ),
+              icon: const Icon(Icons.local_hospital_outlined),
+              label: const Text('Hospitals near this rider'),
+            ),
         ],
         if (controller.familyMessage != null) ...[
           const SizedBox(height: 12),
@@ -935,6 +1087,8 @@ class _FamilyScreen extends StatelessWidget {
             ),
           ),
         ),
+        const SizedBox(height: 20),
+        const _ProjectTeamCard(),
         if (onSignOut != null) ...[
           const SizedBox(height: 10),
           TextButton.icon(
@@ -973,6 +1127,183 @@ class _FamilyScreen extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _ProjectTeamCard extends StatelessWidget {
+  const _ProjectTeamCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [AppColors.navy, Color(0xFF163E35)],
+        ),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x1A102723),
+            blurRadius: 22,
+            offset: Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Color(0xFF244F45),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Padding(
+                        padding: EdgeInsets.all(10),
+                        child: Icon(
+                          Icons.school_rounded,
+                          color: AppColors.lime,
+                          size: 21,
+                        ),
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Project team',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 19,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            ProjectIdentity.department,
+                            style: TextStyle(
+                              color: Colors.white60,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 15),
+                const Text(
+                  ProjectIdentity.college,
+                  style: TextStyle(
+                    color: Colors.white70,
+                    height: 1.4,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                ...ProjectIdentity.students.map(
+                  (student) => _StudentIdentityRow(student: student),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            color: const Color(0x1FFFFFFF),
+            child: const Row(
+              children: [
+                Icon(
+                  Icons.workspace_premium_rounded,
+                  color: AppColors.lime,
+                  size: 19,
+                ),
+                SizedBox(width: 10),
+                Text(
+                  'Project Guide',
+                  style: TextStyle(color: Colors.white60, fontSize: 11),
+                ),
+                Spacer(),
+                Text(
+                  ProjectIdentity.guide,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StudentIdentityRow extends StatelessWidget {
+  const _StudentIdentityRow({required this.student});
+
+  final ProjectStudent student;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 17,
+            backgroundColor: const Color(0xFF28564B),
+            child: Text(
+              student.name.substring(0, 1),
+              style: const TextStyle(
+                color: AppColors.lime,
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+              ),
+            ),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Text(
+              student.name,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+            decoration: BoxDecoration(
+              color: const Color(0xFF21483F),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Text(
+              student.usn,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1678,9 +2009,9 @@ class _GuardianAlertCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Rider safety alert',
-                style: TextStyle(
+              Text(
+                '${alert.riderName} · SOS',
+                style: const TextStyle(
                   color: AppColors.danger,
                   fontWeight: FontWeight.w800,
                 ),
@@ -1798,7 +2129,7 @@ class _LocationPanel extends StatelessWidget {
             ),
           ),
           IconButton(
-            onPressed: controller.loadHospitals,
+            onPressed: () => _showOwnHospitals(context, controller),
             icon: const Icon(
               Icons.local_hospital_outlined,
               color: Colors.white,
@@ -1850,42 +2181,6 @@ class _MapControlButton extends StatelessWidget {
       onPressed: onPressed,
       icon: Icon(icon),
       color: active ? Colors.white : AppColors.ink,
-    ),
-  );
-}
-
-class _RiderMapMarker extends StatelessWidget {
-  const _RiderMapMarker();
-
-  @override
-  Widget build(BuildContext context) => Container(
-    decoration: BoxDecoration(
-      color: AppColors.primary,
-      shape: BoxShape.circle,
-      border: Border.all(color: Colors.white, width: 4),
-      boxShadow: const [
-        BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 3)),
-      ],
-    ),
-    child: const Icon(Icons.two_wheeler_rounded, color: Colors.white, size: 25),
-  );
-}
-
-class _HospitalMapMarker extends StatelessWidget {
-  const _HospitalMapMarker();
-
-  @override
-  Widget build(BuildContext context) => Container(
-    decoration: BoxDecoration(
-      color: AppColors.danger,
-      shape: BoxShape.circle,
-      border: Border.all(color: Colors.white, width: 3),
-      boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8)],
-    ),
-    child: const Icon(
-      Icons.local_hospital_rounded,
-      color: Colors.white,
-      size: 21,
     ),
   );
 }
@@ -2066,13 +2361,19 @@ class _EmergencyOverlay extends StatelessWidget {
               ),
               const SizedBox(height: 26),
               const Text(
-                'Possible impact detected',
+                'Possible accident detected',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 28,
                   fontWeight: FontWeight.w800,
                 ),
+              ),
+              const SizedBox(height: 9),
+              Text(
+                controller.accidentReason ?? 'Unusual phone motion detected',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70),
               ),
               const SizedBox(height: 9),
               const Text(
@@ -2311,7 +2612,7 @@ Future<void> _showInviteGuardian(
           ),
           const SizedBox(height: 7),
           const Text(
-            'They must create a RideGuardian account with this email before accepting.',
+            'Enter their verified email or phone with country code (+91…). They sign in with that contact and accept in Family.',
           ),
           const SizedBox(height: 18),
           TextField(
@@ -2319,7 +2620,7 @@ Future<void> _showInviteGuardian(
             keyboardType: TextInputType.emailAddress,
             autofocus: true,
             decoration: InputDecoration(
-              labelText: 'Guardian email',
+              labelText: 'Guardian email or +91 phone number',
               prefixIcon: const Icon(Icons.mail_outline_rounded),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(15),
@@ -2342,4 +2643,201 @@ Future<void> _showInviteGuardian(
     await controller.inviteGuardian(email.text);
   }
   email.dispose();
+}
+
+Future<void> _showOwnHospitals(
+  BuildContext context,
+  RideController controller,
+) => showHospitalSearch(
+  context,
+  title: 'Hospitals near you',
+  search: () async {
+    await controller.loadHospitals();
+    if (controller.hospitalError != null) {
+      throw StateError(controller.hospitalError!);
+    }
+    return controller.nearbyHospitals;
+  },
+);
+
+Future<void> _showHelmetCheck(
+  BuildContext context,
+  RideController controller,
+) async {
+  if (controller.isRiding) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('End your ride before taking a new helmet photo.'),
+      ),
+    );
+    return;
+  }
+  await showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (context) => SafeArea(
+      child: ListenableBuilder(
+        listenable: controller,
+        builder: (context, _) {
+          final checking = controller.helmetState == HelmetCheckState.checking;
+          final detected = controller.helmetState == HelmetCheckState.detected;
+          return SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 28),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.sports_motorsports_rounded,
+                    size: 48,
+                    color: detected ? AppColors.primary : AppColors.amber,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    detected
+                        ? 'Helmet detected on your head'
+                        : 'Helmet check before riding',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Wear your motorcycle helmet. Keep your whole head and helmet in the frame, with good lighting. Fasten the chin strap.',
+                  ),
+                  if (checking)
+                    const Padding(
+                      padding: EdgeInsets.all(20),
+                      child: Column(
+                        children: [
+                          CircularProgressIndicator(),
+                          SizedBox(height: 10),
+                          Text('Checking your photo…'),
+                        ],
+                      ),
+                    ),
+                  if (controller.helmetMessage != null)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Text(controller.helmetMessage!),
+                    ),
+                  if (detected)
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: controller.helmetStrapConfirmed,
+                      onChanged: (value) =>
+                          controller.confirmHelmetStrap(value ?? false),
+                      title: const Text(
+                        'I have fastened my chin strap and checked the helmet fits securely.',
+                      ),
+                      subtitle: const Text(
+                        'A photo cannot certify fastening or fit.',
+                      ),
+                    ),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: checking ? null : controller.runHelmetCheck,
+                    icon: const Icon(Icons.camera_alt_outlined),
+                    label: Text(
+                      detected ? 'Retake photo' : 'Take helmet photo',
+                    ),
+                  ),
+                  if (detected)
+                    TextButton(
+                      onPressed: controller.canStartRide
+                          ? () => Navigator.pop(context)
+                          : null,
+                      child: const Text('Ready to ride'),
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    ),
+  );
+}
+
+Future<void> _showHospitalsNear(
+  BuildContext context,
+  AppBackend backend,
+  double latitude,
+  double longitude,
+) async {
+  final search = backend.nearbyHospitals(latitude, longitude);
+  await showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (context) => SizedBox(
+      height: MediaQuery.sizeOf(context).height * .65,
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Hospitals near the rider',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Search uses the rider’s shared location. Tap for directions or call to confirm emergency care.',
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: FutureBuilder<List<NearbyPlace>>(
+                future: search,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState != ConnectionState.done) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (snapshot.hasError) {
+                    return Center(child: Text(snapshot.error.toString()));
+                  }
+                  final hospitals = snapshot.data ?? [];
+                  if (hospitals.isEmpty) {
+                    return const Center(
+                      child: Text('No hospitals found within 10 km.'),
+                    );
+                  }
+                  return ListView(
+                    children: hospitals
+                        .map(
+                          (hospital) => ListTile(
+                            leading: const Icon(
+                              Icons.local_hospital,
+                              color: AppColors.danger,
+                            ),
+                            title: Text(hospital.name),
+                            subtitle: Text(
+                              '${hospital.distanceKm.toStringAsFixed(1)} km from rider',
+                            ),
+                            onTap: () => launchUrl(
+                              Uri.parse(
+                                'https://www.google.com/maps/dir/?api=1&destination=${hospital.latitude},${hospital.longitude}',
+                              ),
+                              mode: LaunchMode.externalApplication,
+                            ),
+                            trailing: hospital.phone == null
+                                ? null
+                                : IconButton(
+                                    tooltip: 'Call hospital',
+                                    icon: const Icon(Icons.phone),
+                                    onPressed: () => launchUrl(
+                                      Uri(scheme: 'tel', path: hospital.phone),
+                                    ),
+                                  ),
+                          ),
+                        )
+                        .toList(),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }

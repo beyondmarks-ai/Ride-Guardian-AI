@@ -1,0 +1,4 @@
+local.settings.json
+test_*.py
+__pycache__/
+.venv/

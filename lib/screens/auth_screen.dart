@@ -1,12 +1,20 @@
 import 'package:flutter/material.dart';
 
+import '../config/project_identity.dart';
 import '../controllers/auth_controller.dart';
 import '../theme/app_theme.dart';
 
 class AuthScreen extends StatefulWidget {
-  const AuthScreen({super.key, required this.controller});
+  const AuthScreen({
+    super.key,
+    required this.controller,
+    this.guardian = false,
+    this.onChangeRole,
+  });
 
   final AuthController controller;
+  final bool guardian;
+  final VoidCallback? onChangeRole;
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
@@ -15,14 +23,16 @@ class AuthScreen extends StatefulWidget {
 class _AuthScreenState extends State<AuthScreen> {
   final email = TextEditingController();
   final password = TextEditingController();
-  final code = TextEditingController();
+  final phone = TextEditingController(text: '+91 ');
+  final smsCode = TextEditingController();
   bool obscurePassword = true;
 
   @override
   void dispose() {
     email.dispose();
     password.dispose();
-    code.dispose();
+    phone.dispose();
+    smsCode.dispose();
     super.dispose();
   }
 
@@ -32,7 +42,7 @@ class _AuthScreenState extends State<AuthScreen> {
       listenable: widget.controller,
       builder: (context, _) {
         final controller = widget.controller;
-        if (controller.view == AuthView.confirm && email.text.isEmpty) {
+        if (controller.view == AuthView.verifyEmail && email.text.isEmpty) {
           email.text = controller.pendingEmail;
         }
         return Scaffold(
@@ -45,6 +55,25 @@ class _AuthScreenState extends State<AuthScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      if (widget.onChangeRole != null)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: controller.busy
+                                ? null
+                                : widget.onChangeRole,
+                            icon: const Icon(Icons.arrow_back),
+                            label: const Text('Change role'),
+                          ),
+                        ),
+                      Text(
+                        widget.guardian ? 'GUARDIAN ACCOUNT' : 'RIDER ACCOUNT',
+                        style: const TextStyle(
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
                       Align(
                         alignment: Alignment.centerLeft,
                         child: Container(
@@ -68,7 +97,9 @@ class _AuthScreenState extends State<AuthScreen> {
                       ),
                       const SizedBox(height: 9),
                       Text(
-                        _subtitle(controller.view),
+                        widget.guardian && controller.view == AuthView.signIn
+                            ? 'Sign in to connect with a rider and open your guardian dashboard.'
+                            : _subtitle(controller.view),
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                       const SizedBox(height: 28),
@@ -89,7 +120,25 @@ class _AuthScreenState extends State<AuthScreen> {
                         ),
                         const SizedBox(height: 14),
                       ],
-                      if (controller.view != AuthView.confirm) ...[
+                      if (controller.message != null) ...[
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE9F4F0),
+                            borderRadius: BorderRadius.circular(15),
+                          ),
+                          child: Text(
+                            controller.message!,
+                            style: const TextStyle(
+                              color: AppColors.primaryDark,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                      ],
+                      if (controller.view == AuthView.signIn ||
+                          controller.view == AuthView.signUp) ...[
                         TextField(
                           controller: email,
                           keyboardType: TextInputType.emailAddress,
@@ -123,20 +172,55 @@ class _AuthScreenState extends State<AuthScreen> {
                                 ),
                               ),
                         ),
-                      ] else ...[
+                      ] else if (controller.view == AuthView.phoneSignIn) ...[
                         TextField(
-                          controller: code,
+                          controller: phone,
+                          keyboardType: TextInputType.phone,
+                          autofillHints: const [AutofillHints.telephoneNumber],
+                          decoration: _decoration(
+                            'Mobile number with country code',
+                            Icons.phone_android_rounded,
+                          ),
+                        ),
+                      ] else if (controller.view == AuthView.phoneCode) ...[
+                        TextField(
+                          controller: smsCode,
                           keyboardType: TextInputType.number,
                           autofillHints: const [AutofillHints.oneTimeCode],
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontSize: 24,
-                            letterSpacing: 7,
-                            fontWeight: FontWeight.w700,
-                          ),
                           decoration: _decoration(
-                            'Verification code',
-                            Icons.verified_user_outlined,
+                            '6-digit one-time code',
+                            Icons.password_rounded,
+                          ),
+                        ),
+                      ] else ...[
+                        Container(
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            border: Border.all(color: AppColors.outline),
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: const Row(
+                            children: [
+                              CircleAvatar(
+                                backgroundColor: Color(0xFFE0F3EC),
+                                child: Icon(
+                                  Icons.mark_email_read_outlined,
+                                  color: AppColors.primary,
+                                ),
+                              ),
+                              SizedBox(width: 14),
+                              Expanded(
+                                child: Text(
+                                  'Open the Firebase verification link in your email, then return to the app.',
+                                  style: TextStyle(
+                                    color: AppColors.ink,
+                                    fontSize: 13,
+                                    height: 1.45,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -164,22 +248,86 @@ class _AuthScreenState extends State<AuthScreen> {
                               : Text(_button(controller.view)),
                         ),
                       ),
+                      if (controller.view == AuthView.signIn ||
+                          controller.view == AuthView.signUp) ...[
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: controller.busy
+                              ? null
+                              : () => controller.show(AuthView.phoneSignIn),
+                          icon: const Icon(Icons.phone_android_rounded),
+                          label: const Text('Continue with phone number'),
+                        ),
+                      ],
                       const SizedBox(height: 18),
                       TextButton(
                         onPressed: controller.busy
                             ? null
+                            : controller.view == AuthView.verifyEmail
+                            ? controller.resendEmailVerification
+                            : controller.view == AuthView.phoneCode
+                            ? () => controller.sendPhoneCode(phone.text)
+                            : controller.view == AuthView.phoneSignIn
+                            ? () => controller.show(AuthView.signIn)
                             : () => controller.show(
                                 controller.view == AuthView.signIn
                                     ? AuthView.signUp
                                     : AuthView.signIn,
                               ),
                         child: Text(
-                          controller.view == AuthView.signIn
-                              ? 'New rider? Create a secure account'
+                          controller.view == AuthView.verifyEmail
+                              ? 'Resend verification email'
+                              : controller.view == AuthView.phoneCode
+                              ? 'Resend one-time code'
+                              : controller.view == AuthView.phoneSignIn
+                              ? 'Use email and password instead'
+                              : controller.view == AuthView.signIn
+                              ? widget.guardian
+                                    ? 'New guardian? Create a secure account'
+                                    : 'New rider? Create a secure account'
                               : 'Already registered? Sign in',
                         ),
                       ),
-                      const SizedBox(height: 30),
+                      if (controller.view == AuthView.verifyEmail ||
+                          controller.view == AuthView.phoneCode)
+                        TextButton(
+                          onPressed: controller.busy
+                              ? null
+                              : () => controller.show(AuthView.signIn),
+                          child: const Text('Use a different account'),
+                        ),
+                      const SizedBox(height: 24),
+                      Container(
+                        padding: const EdgeInsets.all(15),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE9F4F0),
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: const Column(
+                          children: [
+                            Text(
+                              ProjectIdentity.college,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: AppColors.primaryDark,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              '${ProjectIdentity.department} - Guided by ${ProjectIdentity.guide}',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: AppColors.primary,
+                                fontSize: 10,
+                                height: 1.4,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
                       const Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
@@ -190,7 +338,7 @@ class _AuthScreenState extends State<AuthScreen> {
                           ),
                           SizedBox(width: 6),
                           Text(
-                            'Protected by AWS Cognito',
+                            'Protected by Firebase Authentication',
                             style: TextStyle(
                               fontSize: 11,
                               color: AppColors.muted,
@@ -213,7 +361,9 @@ class _AuthScreenState extends State<AuthScreen> {
     await switch (controller.view) {
       AuthView.signIn => controller.signIn(email.text, password.text),
       AuthView.signUp => controller.signUp(email.text, password.text),
-      AuthView.confirm => controller.confirm(code.text),
+      AuthView.verifyEmail => controller.checkEmailVerification(),
+      AuthView.phoneSignIn => controller.sendPhoneCode(phone.text),
+      AuthView.phoneCode => controller.verifyPhoneCode(smsCode.text),
     };
   }
 
@@ -235,7 +385,9 @@ class _AuthScreenState extends State<AuthScreen> {
   String _title(AuthView view) => switch (view) {
     AuthView.signIn => 'Welcome back',
     AuthView.signUp => 'Create your account',
-    AuthView.confirm => 'Verify your email',
+    AuthView.verifyEmail => 'Verify your email',
+    AuthView.phoneSignIn => 'Continue with your phone',
+    AuthView.phoneCode => 'Enter your secure code',
   };
 
   String _subtitle(AuthView view) => switch (view) {
@@ -243,13 +395,19 @@ class _AuthScreenState extends State<AuthScreen> {
       'Sign in to start protected rides and share safely with your guardian circle.',
     AuthView.signUp =>
       'Your rides and location are private and tied to your verified identity.',
-    AuthView.confirm =>
-      'Enter the verification code AWS sent to ${widget.controller.pendingEmail}.',
+    AuthView.verifyEmail =>
+      'A secure link was sent to ${widget.controller.pendingEmail}.',
+    AuthView.phoneSignIn =>
+      'Firebase will verify your mobile number with a one-time SMS code.',
+    AuthView.phoneCode =>
+      'Enter the code sent to ${widget.controller.pendingPhone}.',
   };
 
   String _button(AuthView view) => switch (view) {
     AuthView.signIn => 'Sign in securely',
     AuthView.signUp => 'Create account',
-    AuthView.confirm => 'Verify account',
+    AuthView.verifyEmail => 'I have verified my email',
+    AuthView.phoneSignIn => 'Send one-time code',
+    AuthView.phoneCode => 'Verify and sign in',
   };
 }

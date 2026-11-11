@@ -39,6 +39,10 @@ migrate_working_dir/
 *.env
 .env.*
 !*.env.example
+azure_backend/local.settings.json
+azure_backend/.python_packages/
+/output/*.mp3
+/helmet_demo/models/
 
 # Symbolication related
 app.*.symbols

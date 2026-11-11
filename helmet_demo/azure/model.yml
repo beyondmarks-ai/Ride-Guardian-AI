@@ -1,0 +1,6 @@
+$schema: https://azuremlschemas.azureedge.net/latest/model.schema.json
+name: rideguardian-helmet-yolov8n
+version: 1
+type: custom_model
+path: ../models/best.pt
+description: YOLOv8n helmet/no-helmet starter checkpoint for RideGuardian.

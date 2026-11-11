@@ -44,7 +44,7 @@ class RideMonitor {
     if (defaultTargetPlatform == TargetPlatform.android) {
       settings = AndroidSettings(
         accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 5,
+        distanceFilter: 0,
         intervalDuration: Duration(seconds: 2),
         foregroundNotificationConfig: ForegroundNotificationConfig(
           notificationTitle: 'RideGuardian protection is active',
