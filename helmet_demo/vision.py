@@ -5,8 +5,13 @@ import io
 import json
 import os
 from urllib import request
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 from PIL import Image
+
+load_dotenv(Path(__file__).resolve().parent / '.env', override=False, encoding='utf-8-sig', interpolate=False)
 
 
 AZURE_OPENAI_ENDPOINT = os.getenv(

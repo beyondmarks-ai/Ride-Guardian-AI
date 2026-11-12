@@ -36,6 +36,7 @@ migrate_working_dir/
 /.tools/
 **/.aws-sam/
 **/__pycache__/
+**/.venv/
 *.env
 .env.*
 !*.env.example
